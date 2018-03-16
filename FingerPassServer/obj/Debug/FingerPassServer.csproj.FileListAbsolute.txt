@@ -1,0 +1,12 @@
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\FingerPassServer.exe.config
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\FingerPassServer.exe
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\FingerPassServer.pdb
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\obj\Debug\FingerPassServer.csprojResolveAssemblyReference.cache
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\obj\Debug\FingerPassServer.csproj.CoreCompileInputs.cache
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\obj\Debug\FingerPassServer.exe
+c:\users\admin\source\repos\FingerPassServer\FingerPassServer\obj\Debug\FingerPassServer.pdb
+C:\Users\Admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\Npgsql.dll
+C:\Users\Admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\System.Threading.Tasks.Extensions.dll
+C:\Users\Admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\Npgsql.xml
+C:\Users\Admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\System.Threading.Tasks.Extensions.xml
+C:\Users\Admin\source\repos\FingerPassServer\FingerPassServer\bin\Debug\BouncyCastle.Crypto.dll
