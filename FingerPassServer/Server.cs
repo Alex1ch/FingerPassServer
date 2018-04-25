@@ -18,13 +18,15 @@ namespace FingerPassServer
     class Server
     {
         static X509Certificate2 serverCertificate = null;
-        static TcpListener listener;
+        static TcpListener sslOutListener;
+        static TcpListener frontListener;
+        static string frontAddress= "127.0.0.1";
         static bool alive;
         string sqlUser = "fingerpassserver";
         string sqlPass = "matrixislayered";
         string sqlName = "fingerpassserverdb";
         static NpgsqlConnectionStringBuilder stringBuilder;
-        Dictionary<IPAddress, SslStream> sslStreamDict = new Dictionary<IPAddress, SslStream>();
+        //static Dictionary<>
 
         static NpgsqlConnection conn;
 
@@ -56,65 +58,106 @@ namespace FingerPassServer
             return String.Format("Count: {0}, Active: {1}, Cleaned: {2}", count, active, cleaned);
         }
 
+        //Serve for auth from front
+        Task ListenFront = new Task(() => {
+            Logger.Log("Front listener is started", 1);
 
-        Task ListenTcpConnection = new Task(() => {
-        Console.WriteLine("Server is up, waiting for connections");
+            byte[] approve = new byte[32];
+            byte[] message = Encoding.UTF8.GetBytes("<APPROVED>");
+            Buffer.BlockCopy(message,0,approve,0,message.Length);
 
-        while (alive) {
-            TcpClient client = listener.AcceptTcpClient();
-                
-            Console.WriteLine(CleanUpTasks());
+            while (alive) {
+                TcpClient client = frontListener.AcceptTcpClient();
+                NetworkStream stream = new NetworkStream(client.Client);
+                StreamReader sReader = new StreamReader(stream);
+                StreamWriter sWriter = new StreamWriter(stream);
 
-                Task ClientHandler = new Task(() => {
+                string ip = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
 
-                    try
-                    {
-                        SslStreamRW sslStreamRW = new SslStreamRW(client, serverCertificate);
+                if (ip != frontAddress)
+                {
+                    Logger.Log("Request from incorrect front ip (" + ip + ")", 3);
+                    break;
+                }
 
-                        Console.WriteLine("TCP Client connected - "+sslStreamRW.Ip+ " -  id: " + sslStreamRW.Id);
-
-                        string message;
-
-                        while (sslStreamRW.Alive&&alive)
-                        {
-                            if (sslStreamRW.ReadString(out message))
+                Task.Factory.StartNew(() => {
+                    switch (sReader.ReadLine()) {
+                        case "<REQUEST AUTH>":
                             {
-                                if(message.Length!=0)
-                                    Console.WriteLine("Recieved message: " + message);
-                                if (message == "<HANDSHAKE>") {
-                                    Handshake(sslStreamRW);
-                                }
-                            }
-                            else
-                            {
+                                string user = sReader.ReadLine();
+                                Logger.Log("Recieved auth signal from user '"+user+"'", 0);
+                                
+                                //HERE WE GO - AUTH!!!!
+
+                                stream.Write(approve,0,approve.Length);
                                 break;
                             }
-                        }
-
-                    }
-                    catch(Exception e)
-                    {
-                        Console.WriteLine("Exception: {0}", e.Message);
-                        if (e.InnerException != null)
-                        {
-                            Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
-                        }
-                        return;
+                        default: break;
                     }
                 });
-
-                ClientHandler.Start();
-                tasks.Add(ClientHandler);
-
             }
         });
 
+        //Listen commands from Android app
+        Task ListenSslConnection = new Task(() => {
+            Logger.Log("Ssl server is started",1);
 
+            while (alive) {
+                TcpClient client = sslOutListener.AcceptTcpClient();
+                
+                CleanUpTasks();
+
+                    Task clientHandler = new Task(() => {
+
+                        try
+                        {
+                            SslStreamRW sslStreamRW = new SslStreamRW(client, serverCertificate);
+
+                            Logger.Log(sslStreamRW.GetIpFormated() + "TCP Client connected ",1);
+
+                            string message;
+
+                            while (sslStreamRW.Alive&&alive)
+                            {
+                                if (sslStreamRW.ReadString(out message))
+                                {
+                                    if(message.Length!=0)
+                                        Logger.Log(sslStreamRW.GetIpFormated()+"Recieved message: " + message);
+                                    if (message == "<HANDSHAKE>") {
+                                        Handshake(sslStreamRW);
+                                    }
+                                }
+                                else
+                                {
+                                    break;
+                                }
+                            }
+
+                        }
+                        catch(Exception e)
+                        {
+                            Logger.Log("Exception: "+ e.Message,3);
+                            if (e.InnerException != null)
+                            {
+                                Logger.Log("Inner exception: " + e.InnerException.Message,3);
+                            }
+                            return;
+                        }
+                    });
+
+                    clientHandler.Start();
+                    tasks.Add(clientHandler);
+
+                }
+            });
+
+        //Device assign function
         static bool Handshake(SslStreamRW sslStreamRw) {
 
-            string login, pass_hash, device_rsa_open_key, server_rsa_private_key, server_rsa_open_key, device_name;
+            string login, password, device_rsa_open_key, server_rsa_private_key, server_rsa_open_key, device_name, IMEI;
             if (!sslStreamRw.ReadString(out login)) return false;
             if (!sslStreamRw.ReadString(out device_name)) return false;
+            if (!sslStreamRw.ReadString(out IMEI)) return false;
 
             string salt, rounds, hash, user_id;
             login = login.Replace("'", "");
@@ -122,44 +165,65 @@ namespace FingerPassServer
             var connection = new NpgsqlConnection(stringBuilder.ToString());
 
             connection.Open();
-
+            //Checking device
             try
             {
                 string[] splits;
+                var user_raw = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + login + "'", connection).ExecuteScalar();
+                if (user_raw == null)
+                {
+                    Logger.Log(sslStreamRw.GetIpFormated() + "User wasn't found ("+login+")");
+                    sslStreamRw.Disconnect("User wasn't found");
+                    connection.Close();
+                    return false;
+                }
+                else {
+                    Logger.Log(sslStreamRw.GetIpFormated() + "Login: " + login);
+                }
+                user_id = user_raw.ToString();
                 splits = new NpgsqlCommand("SELECT password FROM auth_user WHERE username = '" + login + "'", connection).ExecuteScalar().ToString().Split('$');
-                user_id = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + login + "'", connection).ExecuteScalar().ToString();
+
+                if (new NpgsqlCommand("SELECT * FROM devices WHERE user_id = " + user_id, connection).ExecuteScalar() != null)
+                {
+                    Logger.Log(sslStreamRw.GetIpFormated() + "This user already assign device");
+                    sslStreamRw.Disconnect("This user already assign device, use safety code or delete device in your account");
+                    return false;
+                }
+                if (new NpgsqlCommand("SELECT * FROM devices WHERE imei = '" + IMEI + "'", connection).ExecuteScalar() != null)
+                {
+                    Logger.Log(sslStreamRw.GetIpFormated() + "This device already assigned");
+                    sslStreamRw.Disconnect("This device already assigned");
+                    return false;
+                }
+
                 hash = splits[3];
                 salt = splits[2];
                 rounds = splits[1];
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error in sql request:\n" + e.Message);
+                Logger.Log(sslStreamRw.GetIpFormated() + "Error in sql request:\n" + e.Message,3);
                 if (e.InnerException != null)
                 {
-                    Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
+                    Logger.Log(sslStreamRw.GetIpFormated() + "Inner exception: "+ e.InnerException.Message,3);
                 }
-                if (e.Message == "Object reference not set to an instance of an object.")
-                {
-                    sslStreamRw.Disconnect("User wasn't found");
-                    connection.Close();
-                    return false;
-                }
+                
                 connection.Close(); 
                 sslStreamRw.Disconnect();
                 return false;
             }
-
-            if (!sslStreamRw.WriteString(salt)) return false;
-            if (!sslStreamRw.WriteString(rounds)) return false;
-            if (!sslStreamRw.ReadString(out pass_hash)) return false;
-
-            if (pass_hash != hash)
+            
+            //Checking password
+            if (!sslStreamRw.ReadString(out password)) return false;
+            
+            if (HashFuncs.PBKDF2Sha256GetBytes(32, password, salt, Int32.Parse(rounds)) != hash)
             {
+                Logger.Log("Wrong password");
                 sslStreamRw.Disconnect("Wrong password");
                 return false;
             }
 
+            //Generating RSA Key
             var rsa = new RSACryptoServiceProvider(2048);
             server_rsa_private_key = rsa.ToXmlString(true);
             server_rsa_open_key = rsa.ToXmlString(false);
@@ -167,18 +231,20 @@ namespace FingerPassServer
             if (!sslStreamRw.WriteString(server_rsa_open_key)) return false;
             if (!sslStreamRw.ReadString(out device_rsa_open_key)) return false;
 
-            Console.WriteLine("Device Name: {3}\nDB Hash: {0}\nRecieved hash: {1}\nRecieved device open key: {2}", hash, pass_hash, device_rsa_open_key, device_name);
+            Logger.Log(String.Format(sslStreamRw.GetIpFormated() + "Device Name: {0}({1})\nRecieved device open key: {2}", device_name, IMEI, device_rsa_open_key));
+            
+            //Adding device in database
             try
             {
-                new NpgsqlCommand(String.Format("INSERT INTO devices (device_name,serv_private_key,serv_open_key,device_open_key,user_id) " +
-                    "values ('{0}','{1}','{2}','{3}','{4}');", device_name, server_rsa_private_key, server_rsa_open_key, device_rsa_open_key, user_id), connection).ExecuteNonQuery();
+                new NpgsqlCommand(String.Format("INSERT INTO devices (device_name,imei,serv_private_key,serv_open_key,device_open_key,user_id) " +
+                        "values ('{0}','" + IMEI + "','{1}','{2}','{3}','{4}');", device_name, server_rsa_private_key, server_rsa_open_key, device_rsa_open_key, user_id), connection).ExecuteNonQuery();
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error in sql insert:\n" + e.Message);
+                Logger.Log(sslStreamRw.GetIpFormated() + "Error in sql insert:\n" + e.Message,3);
                 if (e.InnerException != null)
                 {
-                    Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
+                    Logger.Log(sslStreamRw.GetIpFormated() + "Inner exception: " + e.InnerException.Message,3);
                 }
                 sslStreamRw.Disconnect("Something goes wrong in adding device");
                 return false;
@@ -186,15 +252,22 @@ namespace FingerPassServer
             finally {
                 connection.Close();
             }
-            Console.WriteLine("Handshake successful");
+            
+            //Handshake successiful
+            Logger.Log(sslStreamRw.GetIpFormated() + "Handshake successful");
             //if (!sslStreamRw.ReadString(out device_rsa_open_key)) return false;
             if (!sslStreamRw.WriteString("<ACCEPTED>")) return false;
             return true;
         }
 
-
+        //Server constructor/config
         public Server()
         {
+            string filepath = "C:\\Users\\Admin\\Desktop\\Logs\\ServerLog_" + DateTime.Now.ToString().Replace(' ','_').Replace(':','.').Replace('.','_') + ".txt";
+            Console.WriteLine(filepath);
+            Logger.OpenFile(filepath);
+            Logger.LogLevel = 0;
+            
             sqlUser = "fingerpassserver";
             sqlPass = "matrixislayered";
             sqlName = "fingerpassserverdb";
@@ -210,7 +283,7 @@ namespace FingerPassServer
 
             conn.Open();
 
-            new NpgsqlCommand("CREATE TABLE IF NOT EXISTS devices (id SERIAL PRIMARY KEY, device_name NAME NOT NULL," +
+            new NpgsqlCommand("CREATE TABLE IF NOT EXISTS devices (id SERIAL PRIMARY KEY, device_name NAME NOT NULL, imei TEXT NOT NULL," +
                                                                   "serv_private_key TEXT NOT NULL, serv_open_key TEXT NOT NULL," +
                                                                   "device_open_key TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES auth_user (id))", conn).ExecuteNonQuery();
             new NpgsqlCommand("GRANT ALL ON devices TO fingerpassserver", conn).ExecuteNonQuery();
@@ -219,14 +292,18 @@ namespace FingerPassServer
             alive = true;
 
             serverCertificate = new X509Certificate2("fingerpass.ru.pfx","metalinmyblood");
-     
-
-            listener = new TcpListener(IPAddress.Any, 6284);
-            listener.Start();
 
 
-            ListenTcpConnection.Start();
-            ListenTcpConnection.Wait();
+            sslOutListener = new TcpListener(IPAddress.Any, 6284);
+            sslOutListener.Start();
+
+            frontListener = new TcpListener(IPAddress.Any, 6285);
+            frontListener.Start();
+
+            ListenSslConnection.Start();
+            ListenFront.Start();
+
+            ListenSslConnection.Wait();
         }
     }
 }

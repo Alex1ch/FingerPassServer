@@ -28,6 +28,11 @@ namespace FingerPassServer
         public string DisconnectionReason { get => disconnectionReason; set => disconnectionReason = value; }
         public bool Alive { get => alive; set => alive = value; }
 
+        public string GetIpFormated() {
+
+            return "(" + Ip + ","+id.ToString()+")  ";
+        }
+
         public SslStreamRW(TcpClient _client, string servername)
         {
             client = _client;
@@ -56,6 +61,7 @@ namespace FingerPassServer
         
         public void Disconnect()
         {
+            Logger.Log(GetIpFormated() + "Send disconnection signal", 1);
             byte[] zero_length = new byte[2];
             zero_length[0] = 0;
             zero_length[1] = 0;
@@ -69,6 +75,7 @@ namespace FingerPassServer
 
         public void Disconnect(string reason)
         {
+            Logger.Log(GetIpFormated() + "Send disconnection signal", 1);
             byte[] zero_length = new byte[2];
             zero_length[0] = 0;
             zero_length[1] = 0;
@@ -106,10 +113,10 @@ namespace FingerPassServer
             }
             catch(Exception e)
             {
-                Console.WriteLine("Error writing message:\n"+e.Message);
+                Logger.Log("Error writing message:\n" +e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
+                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
@@ -136,10 +143,10 @@ namespace FingerPassServer
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing message:\n" + e.Message);
+                Logger.Log("Error writing message:\n" + e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
+                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
@@ -173,7 +180,7 @@ namespace FingerPassServer
                 int length = lengthBytes[0] * 256 + lengthBytes[1];
                 if (length == 0)
                 {
-                    Console.WriteLine("Recieved disconnection signal");
+                    Logger.Log(GetIpFormated()+"Recieved disconnection signal",1);
                     sslStream.Read(lengthBytes, 0, lengthBytes.Length);
                     length = lengthBytes[0] * 256 + lengthBytes[1];
                     if (length != 0)
@@ -199,11 +206,11 @@ namespace FingerPassServer
                 
             }
             catch (Exception e)
-            {   
-                Console.WriteLine("Error reading message:\n" + e.Message);
+            {
+                Logger.Log("Error reading message:\n" + e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
+                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
@@ -240,7 +247,7 @@ namespace FingerPassServer
                 int length = lengthBytes[0] * 256 + lengthBytes[1];
                 if (length == 0)
                 {
-                    Console.WriteLine("Recieved disconnection signal");
+                    Logger.Log(GetIpFormated() + "Recieved disconnection signal", 1);
                     bytes = sslStream.Read(lengthBytes, 0, lengthBytes.Length);
                     length = lengthBytes[0] * 256 + lengthBytes[1];
                     if (length != 0)
@@ -271,10 +278,10 @@ namespace FingerPassServer
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error reading message:\n" + e.Message);
+                Logger.Log("Error reading message:\n" + e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Console.WriteLine("Inner exception: {0}", e.InnerException.Message);
+                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
