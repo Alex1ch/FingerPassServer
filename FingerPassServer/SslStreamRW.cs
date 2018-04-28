@@ -113,10 +113,10 @@ namespace FingerPassServer
             }
             catch(Exception e)
             {
-                Logger.Log("Error writing message:\n" +e.Message, 3);
+                Logger.Log(GetIpFormated() + "Error writing message: " +e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
+                    Logger.Log(GetIpFormated() + "Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
@@ -132,8 +132,8 @@ namespace FingerPassServer
             }
             byte[] message = Encoding.UTF8.GetBytes(line);
             byte[] concat = new byte[2 + message.Length];
-            concat[0] = (byte)(line.Length >> 8);
-            concat[1] = (byte)(line.Length);
+            concat[0] = (byte)(message.Length >> 8);
+            concat[1] = (byte)(message.Length);
             Buffer.BlockCopy(message, 0, concat, 2, message.Length);
             try
             {
@@ -143,10 +143,10 @@ namespace FingerPassServer
             }
             catch (Exception e)
             {
-                Logger.Log("Error writing message:\n" + e.Message, 3);
+                Logger.Log(GetIpFormated() + "Error writing message: " + e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
+                    Logger.Log(GetIpFormated() + "Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
@@ -207,10 +207,10 @@ namespace FingerPassServer
             }
             catch (Exception e)
             {
-                Logger.Log("Error reading message:\n" + e.Message, 3);
+                Logger.Log(GetIpFormated() + "Error reading message: " + e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
+                    Logger.Log(GetIpFormated()+"Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;
@@ -278,10 +278,10 @@ namespace FingerPassServer
             }
             catch (Exception e)
             {
-                Logger.Log("Error reading message:\n" + e.Message, 3);
+                Logger.Log(GetIpFormated() + "Error reading message: " + e.Message, 3);
                 if (e.InnerException != null)
                 {
-                    Logger.Log("Inner exception: " + e.InnerException.Message, 3);
+                    Logger.Log(GetIpFormated() + "Inner exception: " + e.InnerException.Message, 3);
                 }
                 Disconnect();
                 return false;

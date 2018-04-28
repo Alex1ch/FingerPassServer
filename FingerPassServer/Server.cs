@@ -12,6 +12,12 @@ using System.IO;
 using System.Threading;
 using Npgsql;
 using System.Security.Cryptography;
+using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Security;
+using Org.BouncyCastle.Math;
+using Org.BouncyCastle.Crypto.Encodings;
+using Org.BouncyCastle.Crypto.Engines;
 
 namespace FingerPassServer
 {
@@ -26,7 +32,7 @@ namespace FingerPassServer
         string sqlPass = "matrixislayered";
         string sqlName = "fingerpassserverdb";
         static NpgsqlConnectionStringBuilder stringBuilder;
-        //static Dictionary<>
+        static Dictionary<string, bool> requestPool = new Dictionary<string, bool>();
 
         static NpgsqlConnection conn;
 
@@ -124,7 +130,10 @@ namespace FingerPassServer
                                     if(message.Length!=0)
                                         Logger.Log(sslStreamRW.GetIpFormated()+"Recieved message: " + message);
                                     if (message == "<HANDSHAKE>") {
-                                        Handshake(sslStreamRW);
+                                        Assign(sslStreamRW);
+                                    }
+                                    if (message == "<AUTH>") {
+                                        Auth(sslStreamRW);
                                     }
                                 }
                                 else
@@ -152,7 +161,7 @@ namespace FingerPassServer
             });
 
         //Device assign function
-        static bool Handshake(SslStreamRW sslStreamRw) {
+        static bool Assign(SslStreamRW sslStreamRw) {
 
             string login, password, device_rsa_open_key, server_rsa_private_key, server_rsa_open_key, device_name, IMEI;
             if (!sslStreamRw.ReadString(out login)) return false;
@@ -189,7 +198,16 @@ namespace FingerPassServer
                     sslStreamRw.Disconnect("This user already assign device, use safety code or delete device in your account");
                     return false;
                 }
-                if (new NpgsqlCommand("SELECT * FROM devices WHERE imei = '" + IMEI + "'", connection).ExecuteScalar() != null)
+
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!    Delete "&& false"
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
+                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
+
+                if (new NpgsqlCommand("SELECT * FROM devices WHERE imei = '" + IMEI + "'", connection).ExecuteScalar() != null&&false)
                 {
                     Logger.Log(sslStreamRw.GetIpFormated() + "This device already assigned");
                     sslStreamRw.Disconnect("This device already assigned");
@@ -257,6 +275,64 @@ namespace FingerPassServer
             Logger.Log(sslStreamRw.GetIpFormated() + "Handshake successful");
             //if (!sslStreamRw.ReadString(out device_rsa_open_key)) return false;
             if (!sslStreamRw.WriteString("<ACCEPTED>")) return false;
+            return true;
+        }
+
+        static bool Auth(SslStreamRW sslStreamRW) {
+            string login;
+            if (!sslStreamRW.ReadString(out login)) { return false; };
+            Logger.Log(sslStreamRW.GetIpFormated()+"Recieved auth signal from user '"+login+"'", 1);
+
+            login=login.Replace("'", "");
+
+            string device_rsa_open_string;
+
+            try
+            {
+                conn.Open();
+                string id = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + login + "'", conn).ExecuteScalar().ToString();
+                device_rsa_open_string=new NpgsqlCommand("SELECT device_open_key FROM devices WHERE user_id=" + id, conn).ExecuteScalar().ToString();
+                
+            }
+            catch
+            {
+                Logger.Log(sslStreamRW.GetIpFormated()+"Error in user SQL request", 3);
+                sslStreamRW.Disconnect("Serverside error, try to reassign device(id="+sslStreamRW.Id+")");
+                conn.Close();
+                return false;
+            }
+            conn.Close();
+
+            byte[] device_rsa_open=Convert.FromBase64String(device_rsa_open_string);
+            var encryptEngine = new Pkcs1Encoding(new RsaEngine());
+            AsymmetricKeyParameter asymmetricKeyParameter = PublicKeyFactory.CreateKey(device_rsa_open);
+            encryptEngine.Init(true, asymmetricKeyParameter);
+            
+
+            RsaKeyParameters rsaKeyParameters = (RsaKeyParameters)asymmetricKeyParameter;
+            RSAParameters rsaParameters = new RSAParameters();
+            rsaParameters.Modulus = rsaKeyParameters.Modulus.ToByteArrayUnsigned();
+            rsaParameters.Exponent = rsaKeyParameters.Exponent.ToByteArrayUnsigned();
+            
+            RSACryptoServiceProvider device_rsa = new RSACryptoServiceProvider();
+            device_rsa.ImportParameters(rsaParameters);
+
+            byte[] generated_bytes = new byte[128];
+            new Random(DateTime.Now.Millisecond).NextBytes(generated_bytes);
+            Logger.Log(sslStreamRW.GetIpFormated()+"Generated number is "+ new BigInteger(generated_bytes).ToString());
+
+            byte[] encrypted_bytes = device_rsa.Encrypt(generated_bytes,false);
+            byte[] encrypted_bytes1 = encryptEngine.ProcessBlock(generated_bytes, 0, generated_bytes.Length);
+
+            if (encrypted_bytes.SequenceEqual(encrypted_bytes1)) Logger.Log("Equal!", 3);
+
+            if (!sslStreamRW.WriteBytes(encrypted_bytes)) return false;
+            if (!sslStreamRW.WriteBytes(generated_bytes)) return false;
+
+
+
+            Logger.Log(encrypted_bytes1.Length.ToString());
+
             return true;
         }
 
