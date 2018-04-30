@@ -18,6 +18,8 @@ using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Crypto.Encodings;
 using Org.BouncyCastle.Crypto.Engines;
+using Org.BouncyCastle.Crypto.Paddings;
+using Org.BouncyCastle.Crypto.Digests;
 
 namespace FingerPassServer
 {
@@ -114,10 +116,9 @@ namespace FingerPassServer
                 CleanUpTasks();
 
                     Task clientHandler = new Task(() => {
-
+                        SslStreamRW sslStreamRW = new SslStreamRW(client, serverCertificate);
                         try
                         {
-                            SslStreamRW sslStreamRW = new SslStreamRW(client, serverCertificate);
 
                             Logger.Log(sslStreamRW.GetIpFormated() + "TCP Client connected ",1);
 
@@ -145,6 +146,7 @@ namespace FingerPassServer
                         }
                         catch(Exception e)
                         {
+                            sslStreamRW.Disconnect("Serverside error ("+sslStreamRW.Id+")");
                             Logger.Log("Exception: "+ e.Message,3);
                             if (e.InnerException != null)
                             {
@@ -278,6 +280,13 @@ namespace FingerPassServer
             return true;
         }
 
+
+
+
+
+
+
+
         static bool Auth(SslStreamRW sslStreamRW) {
             string login;
             if (!sslStreamRW.ReadString(out login)) { return false; };
@@ -303,35 +312,17 @@ namespace FingerPassServer
             }
             conn.Close();
 
-            byte[] device_rsa_open=Convert.FromBase64String(device_rsa_open_string);
-            var encryptEngine = new Pkcs1Encoding(new RsaEngine());
-            AsymmetricKeyParameter asymmetricKeyParameter = PublicKeyFactory.CreateKey(device_rsa_open);
-            encryptEngine.Init(true, asymmetricKeyParameter);
-            
+            var rsa = new RSACryptoServiceProvider();
+            rsa.FromXmlString(device_rsa_open_string);
 
-            RsaKeyParameters rsaKeyParameters = (RsaKeyParameters)asymmetricKeyParameter;
-            RSAParameters rsaParameters = new RSAParameters();
-            rsaParameters.Modulus = rsaKeyParameters.Modulus.ToByteArrayUnsigned();
-            rsaParameters.Exponent = rsaKeyParameters.Exponent.ToByteArrayUnsigned();
-            
-            RSACryptoServiceProvider device_rsa = new RSACryptoServiceProvider();
-            device_rsa.ImportParameters(rsaParameters);
+            byte[] generated_bytes = new byte[192];
+            new SecureRandom().NextBytes(generated_bytes);
 
-            byte[] generated_bytes = new byte[128];
-            new Random(DateTime.Now.Millisecond).NextBytes(generated_bytes);
-            Logger.Log(sslStreamRW.GetIpFormated()+"Generated number is "+ new BigInteger(generated_bytes).ToString());
+            var encrypted_bytes1 = rsa.Encrypt(generated_bytes, true);
 
-            byte[] encrypted_bytes = device_rsa.Encrypt(generated_bytes,false);
-            byte[] encrypted_bytes1 = encryptEngine.ProcessBlock(generated_bytes, 0, generated_bytes.Length);
+            if (!sslStreamRW.WriteBytes(encrypted_bytes1)) return false;
 
-            if (encrypted_bytes.SequenceEqual(encrypted_bytes1)) Logger.Log("Equal!", 3);
-
-            if (!sslStreamRW.WriteBytes(encrypted_bytes)) return false;
-            if (!sslStreamRW.WriteBytes(generated_bytes)) return false;
-
-
-
-            Logger.Log(encrypted_bytes1.Length.ToString());
+            Logger.Log("Generated_bytes is"+new BigInteger(generated_bytes).ToString());
 
             return true;
         }
