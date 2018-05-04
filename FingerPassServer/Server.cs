@@ -42,7 +42,7 @@ namespace FingerPassServer
 
         public static bool Alive { get => alive; set => alive = value; }
 
-        static string CleanUpTasks() {
+        static string CleanUpTasks(List<Task> tasks) {
             int count=0, active=0, cleaned=0;
 
             List<Task> toDispose = new List<Task>();
@@ -73,6 +73,10 @@ namespace FingerPassServer
             byte[] approve = new byte[32];
             byte[] message = Encoding.UTF8.GetBytes("<APPROVED>");
             Buffer.BlockCopy(message,0,approve,0,message.Length);
+            
+            byte[] reject = new byte[32];
+            message = Encoding.UTF8.GetBytes("<REJECT>");
+            Buffer.BlockCopy(message, 0, reject, 0, message.Length);
 
             while (alive) {
                 TcpClient client = frontListener.AcceptTcpClient();
@@ -94,10 +98,20 @@ namespace FingerPassServer
                             {
                                 string user = sReader.ReadLine();
                                 Logger.Log("Recieved auth signal from user '"+user+"'", 0);
-                                
-                                //HERE WE GO - AUTH!!!!
 
-                                stream.Write(approve,0,approve.Length);
+                                requestPool.Add(user, false);
+                                bool result;
+                                for (int i = 0; i < 60; i++) {
+                                    Thread.Sleep(1000);
+                                    requestPool.TryGetValue(user,out result);
+                                    if (result==true) {
+                                        requestPool.Remove(user);
+                                        stream.Write(approve, 0, approve.Length);
+                                        break;
+                                    }
+                                }
+                                requestPool.Remove(user);
+                                stream.Write(reject, 0, reject.Length);
                                 break;
                             }
                         default: break;
@@ -113,7 +127,7 @@ namespace FingerPassServer
             while (alive) {
                 TcpClient client = sslOutListener.AcceptTcpClient();
                 
-                CleanUpTasks();
+                CleanUpTasks(tasks);
 
                     Task clientHandler = new Task(() => {
                         SslStreamRW sslStreamRW = new SslStreamRW(client, serverCertificate);
@@ -135,6 +149,7 @@ namespace FingerPassServer
                                     }
                                     if (message == "<AUTH>") {
                                         Auth(sslStreamRW);
+                                        
                                     }
                                 }
                                 else
@@ -200,16 +215,8 @@ namespace FingerPassServer
                     sslStreamRw.Disconnect("This user already assign device, use safety code or delete device in your account");
                     return false;
                 }
-
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!    Delete "&& false"
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
-                //DELETE THINGS BELOW!!!!!!!!!!!!!!!!!!!! !!!!!
-
-                if (new NpgsqlCommand("SELECT * FROM devices WHERE imei = '" + IMEI + "'", connection).ExecuteScalar() != null&&false)
+               
+                if (new NpgsqlCommand("SELECT * FROM devices WHERE imei = '" + IMEI + "'", connection).ExecuteScalar() != null)
                 {
                     Logger.Log(sslStreamRw.GetIpFormated() + "This device already assigned");
                     sslStreamRw.Disconnect("This device already assigned");
@@ -229,7 +236,7 @@ namespace FingerPassServer
                 }
                 
                 connection.Close(); 
-                sslStreamRw.Disconnect();
+                sslStreamRw.Disconnect("Serverside error\nid = "+sslStreamRw.Id);
                 return false;
             }
             
@@ -292,38 +299,118 @@ namespace FingerPassServer
             if (!sslStreamRW.ReadString(out login)) { return false; };
             Logger.Log(sslStreamRW.GetIpFormated()+"Recieved auth signal from user '"+login+"'", 1);
 
+            if (!requestPool.ContainsKey(login))
+            {
+                Logger.Log(sslStreamRW.GetIpFormated() + "No active authentication requests");
+                sslStreamRW.Disconnect("No active authentication requests");
+                return false;
+            }
+
             login=login.Replace("'", "");
 
-            string device_rsa_open_string;
+            string device_rsa_open_string, server_rsa_private_string;
 
             try
             {
                 conn.Open();
                 string id = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + login + "'", conn).ExecuteScalar().ToString();
                 device_rsa_open_string=new NpgsqlCommand("SELECT device_open_key FROM devices WHERE user_id=" + id, conn).ExecuteScalar().ToString();
-                
+                server_rsa_private_string = new NpgsqlCommand("SELECT serv_private_key FROM devices WHERE user_id=" + id, conn).ExecuteScalar().ToString();
+
             }
-            catch
+            catch(Exception e)
             {
-                Logger.Log(sslStreamRW.GetIpFormated()+"Error in user SQL request", 3);
-                sslStreamRW.Disconnect("Serverside error, try to reassign device(id="+sslStreamRW.Id+")");
+                Logger.Log(sslStreamRW.GetIpFormated()+"Error in user SQL request. Exception: "+e.Message+"; "+e.InnerException, 3);
+                sslStreamRW.Disconnect("Serverside error\nid = "+sslStreamRW.Id+")");
                 conn.Close();
                 return false;
             }
             conn.Close();
 
-            var rsa = new RSACryptoServiceProvider();
-            rsa.FromXmlString(device_rsa_open_string);
 
             byte[] generated_bytes = new byte[192];
-            new SecureRandom().NextBytes(generated_bytes);
+            var device_rsa = new RSACryptoServiceProvider();
+            var server_rsa = new RSACryptoServiceProvider();
 
-            var encrypted_bytes1 = rsa.Encrypt(generated_bytes, true);
+            try
+            {
+                device_rsa.FromXmlString(device_rsa_open_string);
+                server_rsa.FromXmlString(server_rsa_private_string);
+            }
+            catch (Exception e) {
+                Logger.Log(sslStreamRW.GetIpFormated() + "Error in parsing keys from database", 3);
+                sslStreamRW.Disconnect("Serverside error\nid = " + sslStreamRW.Id + ")");
+                conn.Close();
+                return false;
+            }
 
-            if (!sslStreamRW.WriteBytes(encrypted_bytes1)) return false;
+            byte[] encrypted_bytes1;
 
-            Logger.Log("Generated_bytes is"+new BigInteger(generated_bytes).ToString());
+            try
+            {
+                new SecureRandom().NextBytes(generated_bytes);
 
+                encrypted_bytes1 = device_rsa.Encrypt(generated_bytes, true);
+            }
+            catch (Exception e){
+                Logger.Log(sslStreamRW.GetIpFormated() + "Error in generating. Exception: " + e.Message + "; " + e.InnerException, 3);
+                sslStreamRW.Disconnect("Serverside error\nid = " + sslStreamRW.Id + ")");
+                return false;
+            }
+
+            byte[] recieved_bytes;
+            try
+            {
+                if (!sslStreamRW.WriteBytes(encrypted_bytes1)) return false;
+                if (!sslStreamRW.ReadBytes(out recieved_bytes)) return false;
+            }
+            catch(Exception e)
+            {
+                Logger.Log(sslStreamRW.GetIpFormated() + "Error in token exchange. Exception: " + e.Message + "; " + e.InnerException, 3);
+                sslStreamRW.Disconnect("Serverside error\nid = " + sslStreamRW.Id + ")");
+                return false;
+            }
+
+            byte[] decrypted_bytes;
+
+            try
+            {
+                decrypted_bytes = server_rsa.Decrypt(recieved_bytes, true);
+            }
+            catch (Exception e)
+            {
+                Logger.Log(sslStreamRW.GetIpFormated() + "Error in decryption. Exception: " + e.Message + "; " + e.InnerException, 3);
+                sslStreamRW.Disconnect("Decryption error? try to reassign device\nid = "+sslStreamRW.Id);
+                return false;
+            }
+
+
+
+            if (generated_bytes.SequenceEqual(decrypted_bytes))
+            {
+                if (requestPool.ContainsKey(login))
+                {
+                    requestPool[login] = true;
+                }
+                else
+                {
+                    Logger.Log(sslStreamRW.GetIpFormated() + "No active authentication requests");
+                    sslStreamRW.Disconnect("No active authentication requests");
+                    return false;
+                }
+
+                Logger.Log(sslStreamRW.GetIpFormated() + "Authenticated!");
+                sslStreamRW.WriteString("<APPROVED>");
+                sslStreamRW.Disconnect("Proper auth");
+                
+            }
+            else
+            {
+                sslStreamRW.WriteString("<WRONG TOKEN>");
+                sslStreamRW.Disconnect("Wrong token/decryption");
+            }
+
+            
             return true;
         }
 
