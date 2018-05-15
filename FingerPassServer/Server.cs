@@ -77,6 +77,10 @@ namespace FingerPassServer
             byte[] reject = new byte[32];
             message = Encoding.UTF8.GetBytes("<REJECT>");
             Buffer.BlockCopy(message, 0, reject, 0, message.Length);
+            
+            byte[] multiple_requests = new byte[32];
+            message = Encoding.UTF8.GetBytes("<MULTIPLE>");
+            Buffer.BlockCopy(message, 0, multiple_requests, 0, message.Length);
 
             while (alive) {
                 TcpClient client = frontListener.AcceptTcpClient();
@@ -94,19 +98,82 @@ namespace FingerPassServer
 
                 Task.Factory.StartNew(() => {
                     switch (sReader.ReadLine()) {
-                        case "<REQUEST AUTH>":
+                        case "REQUEST AUTH":
                             {
                                 string user = sReader.ReadLine();
                                 Logger.Log("Recieved auth signal from user '"+user+"'", 0);
 
+                                if (requestPool.ContainsKey(user)) {
+                                    requestPool.Remove(user);
+                                    stream.Write(multiple_requests, 0, multiple_requests.Length);
+                                    break;
+                                }
+
                                 requestPool.Add(user, false);
                                 bool result;
-                                for (int i = 0; i < 60; i++) {
+                                for (int i = 0; i < 30; i++) {
                                     Thread.Sleep(1000);
-                                    requestPool.TryGetValue(user,out result);
-                                    if (result==true) {
-                                        requestPool.Remove(user);
-                                        stream.Write(approve, 0, approve.Length);
+                                    if (requestPool.TryGetValue(user, out result))
+                                    {
+                                        if (result == true)
+                                        {
+                                            requestPool.Remove(user);
+                                            stream.Write(approve, 0, approve.Length);
+                                            break;
+                                        }
+                                    }
+                                    else {
+                                        stream.Write(multiple_requests, 0, multiple_requests.Length);
+                                        break;
+                                    }
+                                }
+                                requestPool.Remove(user);
+                                stream.Write(reject, 0, reject.Length);
+                                break;
+                            }
+                        case "DELETE DEVICE":
+                            {
+                                string user = sReader.ReadLine();
+                                Logger.Log("Recieved auth signal from user '" + user + "'", 0);
+
+                                if (requestPool.ContainsKey(user))
+                                {
+                                    requestPool.Remove(user);
+                                    stream.Write(multiple_requests, 0, multiple_requests.Length);
+                                    break;
+                                }
+
+                                requestPool.Add(user, false);
+                                bool result;
+                                for (int i = 0; i < 30; i++)
+                                {
+                                    Thread.Sleep(1000);
+                                    if (requestPool.TryGetValue(user, out result))
+                                    {
+                                        if (result == true)
+                                        {
+                                            requestPool.Remove(user);
+                                            try
+                                            {
+                                                conn.Open();
+                                                var user_raw = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + user + "'", conn).ExecuteScalar().ToString();
+                                                Console.WriteLine("DELETE FROM devices WHERE user_id=" + user_raw);
+                                                new NpgsqlCommand("DELETE FROM devices WHERE user_id=" + user_raw, conn).ExecuteNonQuery();
+                                            }
+                                            catch
+                                            {
+                                                stream.Write(reject, 0, reject.Length);
+                                            }
+                                            finally {
+                                                conn.Close();
+                                            }
+                                            stream.Write(approve, 0, approve.Length);
+                                            break;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        stream.Write(multiple_requests, 0, multiple_requests.Length);
                                         break;
                                     }
                                 }
