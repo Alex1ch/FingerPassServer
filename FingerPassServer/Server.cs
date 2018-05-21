@@ -21,6 +21,7 @@ using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Paddings;
 using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.X509;
+using Org.BouncyCastle.Crypto.Prng;
 
 namespace FingerPassServer
 {
@@ -321,12 +322,15 @@ namespace FingerPassServer
             if (!sslStreamRw.ReadString(out device_open_key)) return false;
 
             Logger.Log(String.Format(sslStreamRw.GetIpFormated() + "Device Name: {0}({1})\nRecieved device open key: {2}", device_name, IMEI, device_open_key));
-            
+
+            var restore = ((((ulong)new Org.BouncyCastle.Security.SecureRandom(new CryptoApiRandomGenerator()).NextLong())%90000000)+10000000).ToString();
+
+            Logger.Log(sslStreamRw.GetIpFormated()+"Restore code is "+restore);
             //Adding device in database
             try
             {
-                new NpgsqlCommand(String.Format("INSERT INTO devices (device_name,imei,device_open_key,user_id) " +
-                        "values ('{0}','" + IMEI + "','{1}','{2}');", device_name, device_open_key, user_id), connection).ExecuteNonQuery();
+                new NpgsqlCommand(String.Format("INSERT INTO devices (device_name,imei,restore_code,device_open_key,user_id) " +
+                        "values ('{0}','" + IMEI + "','{1}','{2}','{3}');", device_name,restore, device_open_key, user_id), connection).ExecuteNonQuery();
             }
             catch (Exception e)
             {
@@ -344,8 +348,8 @@ namespace FingerPassServer
             
             //Handshake successiful
             Logger.Log(sslStreamRw.GetIpFormated() + "Handshake successful");
-            //if (!sslStreamRw.ReadString(out device_rsa_open_key)) return false;
             if (!sslStreamRw.WriteString("<ACCEPTED>")) return false;
+            if (!sslStreamRw.WriteString(restore)) return false;
             return true;
         }
 
@@ -370,7 +374,7 @@ namespace FingerPassServer
 
             login=login.Replace("'", "");
 
-            string device_rsa_open_string, server_rsa_private_string;
+            string device_rsa_open_string;
 
             try
             {
@@ -474,7 +478,7 @@ namespace FingerPassServer
 
             conn.Open();
 
-            new NpgsqlCommand("CREATE TABLE IF NOT EXISTS devices (id SERIAL PRIMARY KEY, device_name NAME NOT NULL, imei TEXT NOT NULL," +
+            new NpgsqlCommand("CREATE TABLE IF NOT EXISTS devices (id SERIAL PRIMARY KEY, device_name NAME NOT NULL, imei TEXT NOT NULL, restore_code INTEGER NOT NULL," +
                                                                   "device_open_key TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES auth_user (id))", conn).ExecuteNonQuery();
             new NpgsqlCommand("GRANT ALL ON devices TO fingerpassserver", conn).ExecuteNonQuery();
 
