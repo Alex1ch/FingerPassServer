@@ -20,6 +20,7 @@ using Org.BouncyCastle.Crypto.Encodings;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Paddings;
 using Org.BouncyCastle.Crypto.Digests;
+using Org.BouncyCastle.X509;
 
 namespace FingerPassServer
 {
@@ -247,7 +248,7 @@ namespace FingerPassServer
         //Device assign function
         static bool Assign(SslStreamRW sslStreamRw) {
 
-            string login, password, device_rsa_open_key, server_rsa_private_key, server_rsa_open_key, device_name, IMEI;
+            string login, password, device_open_key,  device_name, IMEI;
             if (!sslStreamRw.ReadString(out login)) return false;
             if (!sslStreamRw.ReadString(out device_name)) return false;
             if (!sslStreamRw.ReadString(out IMEI)) return false;
@@ -316,22 +317,16 @@ namespace FingerPassServer
                 sslStreamRw.Disconnect("Wrong password");
                 return false;
             }
+            
+            if (!sslStreamRw.ReadString(out device_open_key)) return false;
 
-            //Generating RSA Key
-            var rsa = new RSACryptoServiceProvider(2048);
-            server_rsa_private_key = rsa.ToXmlString(true);
-            server_rsa_open_key = rsa.ToXmlString(false);
-
-            if (!sslStreamRw.WriteString(server_rsa_open_key)) return false;
-            if (!sslStreamRw.ReadString(out device_rsa_open_key)) return false;
-
-            Logger.Log(String.Format(sslStreamRw.GetIpFormated() + "Device Name: {0}({1})\nRecieved device open key: {2}", device_name, IMEI, device_rsa_open_key));
+            Logger.Log(String.Format(sslStreamRw.GetIpFormated() + "Device Name: {0}({1})\nRecieved device open key: {2}", device_name, IMEI, device_open_key));
             
             //Adding device in database
             try
             {
-                new NpgsqlCommand(String.Format("INSERT INTO devices (device_name,imei,serv_private_key,serv_open_key,device_open_key,user_id) " +
-                        "values ('{0}','" + IMEI + "','{1}','{2}','{3}','{4}');", device_name, server_rsa_private_key, server_rsa_open_key, device_rsa_open_key, user_id), connection).ExecuteNonQuery();
+                new NpgsqlCommand(String.Format("INSERT INTO devices (device_name,imei,device_open_key,user_id) " +
+                        "values ('{0}','" + IMEI + "','{1}','{2}');", device_name, device_open_key, user_id), connection).ExecuteNonQuery();
             }
             catch (Exception e)
             {
@@ -382,7 +377,6 @@ namespace FingerPassServer
                 conn.Open();
                 string id = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + login + "'", conn).ExecuteScalar().ToString();
                 device_rsa_open_string=new NpgsqlCommand("SELECT device_open_key FROM devices WHERE user_id=" + id, conn).ExecuteScalar().ToString();
-                server_rsa_private_string = new NpgsqlCommand("SELECT serv_private_key FROM devices WHERE user_id=" + id, conn).ExecuteScalar().ToString();
 
             }
             catch(Exception e)
@@ -396,13 +390,11 @@ namespace FingerPassServer
 
 
             byte[] generated_bytes = new byte[192];
-            var device_rsa = new RSACryptoServiceProvider();
-            var server_rsa = new RSACryptoServiceProvider();
+            Org.BouncyCastle.X509.X509Certificate gost_cert;
 
             try
             {
-                device_rsa.FromXmlString(device_rsa_open_string);
-                server_rsa.FromXmlString(server_rsa_private_string);
+                gost_cert = new X509CertificateParser().ReadCertificate(Convert.FromBase64String(device_rsa_open_string));
             }
             catch (Exception e) {
                 Logger.Log(sslStreamRW.GetIpFormated() + "Error in parsing keys from database", 3);
@@ -410,25 +402,13 @@ namespace FingerPassServer
                 conn.Close();
                 return false;
             }
-
-            byte[] encrypted_bytes1;
-
-            try
-            {
-                new SecureRandom().NextBytes(generated_bytes);
-
-                encrypted_bytes1 = device_rsa.Encrypt(generated_bytes, true);
-            }
-            catch (Exception e){
-                Logger.Log(sslStreamRW.GetIpFormated() + "Error in generating. Exception: " + e.Message + "; " + e.InnerException, 3);
-                sslStreamRW.Disconnect("Serverside error\nid = " + sslStreamRW.Id + ")");
-                return false;
-            }
+            
+            new SecureRandom().NextBytes(generated_bytes);
 
             byte[] recieved_bytes;
             try
             {
-                if (!sslStreamRW.WriteBytes(encrypted_bytes1)) return false;
+                if (!sslStreamRW.WriteBytes(generated_bytes)) return false;
                 if (!sslStreamRW.ReadBytes(out recieved_bytes)) return false;
             }
             catch(Exception e)
@@ -438,22 +418,12 @@ namespace FingerPassServer
                 return false;
             }
 
-            byte[] decrypted_bytes;
-
-            try
-            {
-                decrypted_bytes = server_rsa.Decrypt(recieved_bytes, true);
-            }
-            catch (Exception e)
-            {
-                Logger.Log(sslStreamRW.GetIpFormated() + "Error in decryption. Exception: " + e.Message + "; " + e.InnerException, 3);
-                sslStreamRW.Disconnect("Decryption error? try to reassign device\nid = "+sslStreamRW.Id);
-                return false;
-            }
+            ISigner signer = SignerUtilities.GetSigner("GOST3411withGOST3410");
+            signer.Init(false, gost_cert.GetPublicKey());
+            signer.BlockUpdate(generated_bytes, 0, generated_bytes.Length);
 
 
-
-            if (generated_bytes.SequenceEqual(decrypted_bytes))
+            if (signer.VerifySignature(recieved_bytes))
             {
                 if (requestPool.ContainsKey(login))
                 {
@@ -505,7 +475,6 @@ namespace FingerPassServer
             conn.Open();
 
             new NpgsqlCommand("CREATE TABLE IF NOT EXISTS devices (id SERIAL PRIMARY KEY, device_name NAME NOT NULL, imei TEXT NOT NULL," +
-                                                                  "serv_private_key TEXT NOT NULL, serv_open_key TEXT NOT NULL," +
                                                                   "device_open_key TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES auth_user (id))", conn).ExecuteNonQuery();
             new NpgsqlCommand("GRANT ALL ON devices TO fingerpassserver", conn).ExecuteNonQuery();
 
