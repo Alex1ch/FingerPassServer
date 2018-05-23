@@ -102,7 +102,8 @@ namespace FingerPassServer
                     switch (sReader.ReadLine()) {
                         case "REQUEST AUTH":
                             {
-                                string user = sReader.ReadLine();
+                                string user = sReader.ReadLine().Replace("'","");
+                                
                                 Logger.Log("Recieved auth signal from user '"+user+"'", 0);
 
                                 if (requestPool.ContainsKey(user)) {
@@ -135,7 +136,7 @@ namespace FingerPassServer
                             }
                         case "DELETE DEVICE":
                             {
-                                string user = sReader.ReadLine();
+                                string user = sReader.ReadLine().Replace("'", "");
                                 Logger.Log("Recieved auth signal from user '" + user + "'", 0);
 
                                 if (requestPool.ContainsKey(user))
@@ -159,7 +160,6 @@ namespace FingerPassServer
                                             {
                                                 conn.Open();
                                                 var user_raw = new NpgsqlCommand("SELECT id FROM auth_user WHERE username = '" + user + "'", conn).ExecuteScalar().ToString();
-                                                Console.WriteLine("DELETE FROM devices WHERE user_id=" + user_raw);
                                                 new NpgsqlCommand("DELETE FROM devices WHERE user_id=" + user_raw, conn).ExecuteNonQuery();
                                             }
                                             catch
