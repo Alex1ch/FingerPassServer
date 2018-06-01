@@ -37,8 +37,7 @@ namespace FingerPassServer
         string sqlName = "fingerpassserverdb";
         static NpgsqlConnectionStringBuilder stringBuilder;
         static Dictionary<string, bool> requestPool = new Dictionary<string, bool>();
-
-        static NpgsqlConnection conn;
+        
 
         static List<Task> tasks = new List<Task>();
 
@@ -99,6 +98,7 @@ namespace FingerPassServer
                 }
 
                 Task.Factory.StartNew(() => {
+                    var conn = new NpgsqlConnection(stringBuilder.ToString());
                     switch (sReader.ReadLine()) {
                         case "REQUEST AUTH":
                             {
@@ -249,6 +249,8 @@ namespace FingerPassServer
         //Device assign function
         static bool Assign(SslStreamRW sslStreamRw) {
 
+            var conn = new NpgsqlConnection(stringBuilder.ToString());
+
             string login, password, device_open_key,  device_name, IMEI;
             if (!sslStreamRw.ReadString(out login)) return false;
             if (!sslStreamRw.ReadString(out device_name)) return false;
@@ -268,7 +270,7 @@ namespace FingerPassServer
                 if (user_raw == null)
                 {
                     Logger.Log(sslStreamRw.GetIpFormated() + "User wasn't found ("+login+")");
-                    sslStreamRw.Disconnect("User wasn't found");
+                    sslStreamRw.Disconnect("Пользователь с таким именем не существует");
                     connection.Close();
                     return false;
                 }
@@ -278,19 +280,20 @@ namespace FingerPassServer
                 user_id = user_raw.ToString();
                 splits = new NpgsqlCommand("SELECT password FROM auth_user WHERE username = '" + login + "'", connection).ExecuteScalar().ToString().Split('$');
 
-                if (new NpgsqlCommand("SELECT * FROM devices WHERE user_id = " + user_id, connection).ExecuteScalar() != null)
-                {
-                    Logger.Log(sslStreamRw.GetIpFormated() + "This user already assign device");
-                    sslStreamRw.Disconnect("This user already assign device, use safety code or delete device in your account");
-                    return false;
-                }
-               
                 if (new NpgsqlCommand("SELECT * FROM devices WHERE imei = '" + IMEI + "'", connection).ExecuteScalar() != null)
                 {
                     Logger.Log(sslStreamRw.GetIpFormated() + "This device already assigned");
-                    sslStreamRw.Disconnect("This device already assigned");
+                    sslStreamRw.Disconnect("Это устройство уже используется");
                     return false;
                 }
+
+                if (new NpgsqlCommand("SELECT * FROM devices WHERE user_id = " + user_id, connection).ExecuteScalar() != null)
+                {
+                    Logger.Log(sslStreamRw.GetIpFormated() + "This user already assign device");
+                    sslStreamRw.Disconnect("Вы уже зарегистрировали другое устройство, используйте код восстановления или удалите устройство в личном кабинете");
+                    return false;
+                }
+               
 
                 hash = splits[3];
                 salt = splits[2];
@@ -323,7 +326,7 @@ namespace FingerPassServer
 
             Logger.Log(String.Format(sslStreamRw.GetIpFormated() + "Device Name: {0}({1})\nRecieved device open key: {2}", device_name, IMEI, device_open_key));
 
-            var restore = ((((ulong)new Org.BouncyCastle.Security.SecureRandom(new CryptoApiRandomGenerator()).NextLong())%90000000)+10000000).ToString();
+            var restore = (((ulong)new Org.BouncyCastle.Security.SecureRandom(new CryptoApiRandomGenerator()).NextLong())%100000000).ToString("D8");
 
             Logger.Log(sslStreamRw.GetIpFormated()+"Restore code is "+restore);
             //Adding device in database
@@ -361,6 +364,8 @@ namespace FingerPassServer
 
 
         static bool Auth(SslStreamRW sslStreamRW) {
+            var conn = new NpgsqlConnection(stringBuilder.ToString());
+
             string login;
             if (!sslStreamRW.ReadString(out login)) { return false; };
             Logger.Log(sslStreamRW.GetIpFormated()+"Recieved auth signal from user '"+login+"'", 1);
@@ -368,7 +373,7 @@ namespace FingerPassServer
             if (!requestPool.ContainsKey(login))
             {
                 Logger.Log(sslStreamRW.GetIpFormated() + "No active authentication requests");
-                sslStreamRW.Disconnect("No active authentication requests");
+                sslStreamRW.Disconnect("Нет запросов на аутентификацию");
                 return false;
             }
 
@@ -436,7 +441,7 @@ namespace FingerPassServer
                 else
                 {
                     Logger.Log(sslStreamRW.GetIpFormated() + "No active authentication requests");
-                    sslStreamRW.Disconnect("No active authentication requests");
+                    sslStreamRW.Disconnect("Нет запросов на аутентификацию");
                     return false;
                 }
 
@@ -474,7 +479,7 @@ namespace FingerPassServer
             stringBuilder.Username = sqlUser;
             stringBuilder.Database = sqlName;
 
-            conn = new NpgsqlConnection(stringBuilder.ToString());
+            var conn = new NpgsqlConnection(stringBuilder.ToString());
 
             conn.Open();
 
